@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>State & District Boundaries (ArcGIS -> Mapbox)</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <!-- Mapbox GL JS -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, Arial, sans-serif;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        .panel {
+            position: absolute;
+            z-index: 10;
+            background: #ffffff;
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        #controls {
+            top: 12px;
+            left: 12px;
+            width: 260px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #legend {
+            bottom: 12px;
+            left: 12px;
+        }
+
+        label {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        select,
+        button {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        select:disabled {
+            background: #f5f5f5;
+        }
+
+        .note {
+            font-size: 12px;
+            color: #555;
+            line-height: 1.3;
+        }
+
+        .badge {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        .row {
+            display: flex;
+            align-items: center;
+            margin-top: 4px;
+        }
+
+        #loading {
+            font-size: 12px;
+            color: #0070ff;
+            display: none;
+        }
+
+        #maskToggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #maskToggle input {
+            margin: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div id="controls" class="panel">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+                <label for="state-select">State</label>
+                <select id="state-select" disabled>
+                    <option value="" selected>Loading states...</option>
+                </select>
+            </div>
+            <div>
+                <label for="district-select">District</label>
+                <select id="district-select" disabled>
+                    <option value="" selected>Select state first</option>
+                </select>
+            </div>
+            <div style="display:flex; gap:6px;">
+                <button id="fetchBtn" type="button" style="flex:1;">Fetch Layer(s)</button>
+                <button id="resetBtn" type="button" style="flex:1;">Reset View</button>
+            </div>
+            <button id="clearBtn" type="button">Clear Layers</button>
+            <div id="loading" style="display:none;font-size:12px;color:#0070ff;">Querying...</div>
+            <p class="note">1. Select a State (required). 2. Optionally select a District. 3. Tick desired layers in
+                legend. 4. Click Fetch Layer(s). No layers shown by default.</p>
+        </div>
+    </div>
+    <div id="legend" class="panel">
+        <b>Layers (select & then Fetch)</b>
+        <div class="layer-item" style="margin-top:6px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:500;">
+                <input type="checkbox" id="layer-state" style="margin:0;" />
+                <span class="badge" style="background:#FFA500"></span>State Boundary
+            </label>
+            <div id="state-status" style="font-size:11px;color:#666;margin-left:22px;">Inactive</div>
+        </div>
+        <div class="layer-item" style="margin-top:6px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:500;">
+                <input type="checkbox" id="layer-district" style="margin:0;" />
+                <span class="badge" style="background:#9C27B0"></span>District Boundary
+            </label>
+            <div id="district-status" style="font-size:11px;color:#666;margin-left:22px;">Inactive</div>
+        </div>
+
+    </div>
+
+    <!-- Turf.js for bbox calculations -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <script>
+        mapboxgl.accessToken = 'pk.eyJ1Ijoicm9oaXRiaGF0dDI0MzciLCJhIjoiY21mbWRia3NzMDBzMDJrc2J6cXg5aTBqeCJ9.d9SBYA8rSq4chTptEmx69w';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/light-v11',
+            center: [78.5, 23.5],
+            zoom: 4.4
+        });
+
+        // Services
+        const STATE_SERVICE = 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/WFSServer/FeatureServer/0'; // State boundaries
+        const DISTRICT_SERVICE = 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/WFSServer_(7)/FeatureServer/0'; // District boundaries
+
+        // UI Elements
+        const stateSelect = document.getElementById('state-select');
+        const districtSelect = document.getElementById('district-select');
+        const fetchBtn = document.getElementById('fetchBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const loadingEl = document.getElementById('loading');
+        const cbState = document.getElementById('layer-state');
+        const cbDistrict = document.getElementById('layer-district');
+        const stateStatus = document.getElementById('state-status');
+        const districtStatus = document.getElementById('district-status');
+
+        // State
+        const fullView = { center: [78.5, 23.5], zoom: 4.4 };
+        let currentStateGeoJSON = null;
+        let currentDistrictGeoJSON = null;
+        const cache = { state: {}, district: {} };
+        const LS_KEY_STATES = 'cachedStatesV1';
+        const FALLBACK_STATES = ["Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal", "Delhi", "Jammu and Kashmir", "Ladakh"]; // Used if service slow
+
+
+        // Generic abortable fetch with timeout & JSON handling
+        async function fetchJSON(url, { timeout = 10000, signal } = {}) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            if (signal) signal.addEventListener('abort', () => controller.abort());
+            const resp = await fetch(url, { signal: controller.signal, headers: { 'Accept': 'application/json' } });
+            clearTimeout(id);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        }
+
+        map.on('load', () => {
+            populateStates();
+        });
+
+        async function populateStates() {
+            // Load cached (local) immediately for responsiveness
+            try {
+                const cached = localStorage.getItem(LS_KEY_STATES);
+                if (cached) {
+                    const states = JSON.parse(cached);
+                    renderStateOptions(states, '(cached)');
+                } else {
+                    // show fallback while fetching real
+                    renderStateOptions(FALLBACK_STATES, '(fallback)');
+                }
+            } catch { /* ignore */ }
+            // Always attempt refreshing list in background
+            try {
+                const url = `${DISTRICT_SERVICE}/query?where=1%3D1&outFields=State&returnDistinctValues=true&returnGeometry=false&f=json&cacheHint=true`;
+                const j = await fetchJSON(url, { timeout: 12000 });
+                const states = (j.features || []).map(f => f.attributes.State).filter(Boolean).sort();
+                if (states.length) {
+                    localStorage.setItem(LS_KEY_STATES, JSON.stringify(states));
+                    renderStateOptions(states);
+                }
+            } catch (e) {
+                console.warn('State list fetch failed, using fallback/cached', e);
+            }
+        }
+
+        function renderStateOptions(list, note = '') {
+            stateSelect.innerHTML = '<option value="">-- Select State --</option>' + list.map(s => `<option value="${encodeURIComponent(s)}">${s}</option>`).join('');
+            stateSelect.disabled = false;
+            if (note) stateSelect.title = 'Source: ' + note; else stateSelect.removeAttribute('title');
+        }
+
+
+
+        stateSelect.addEventListener('change', async e => {
+            districtSelect.disabled = true;
+            districtSelect.innerHTML = '<option value="">Loading districts...</option>';
+            const val = e.target.value;
+            if (!val) {
+                districtSelect.innerHTML = '<option value="">Select state first</option>';
+                return;
+            }
+            await populateDistricts(decodeURIComponent(val));
+        });
+
+        async function populateDistricts(stateName) {
+            try {
+                const where = `State='${stateName.replace(/'/g, "''")}'`;
+                const url = `${DISTRICT_SERVICE}/query?where=${encodeURIComponent(where)}&outFields=District&returnDistinctValues=true&returnGeometry=false&f=json&cacheHint=true`;
+                const j = await fetchJSON(url, { timeout: 12000 });
+                const districts = (j.features || []).map(f => f.attributes.District).filter(Boolean).sort();
+                districtSelect.innerHTML = '<option value="">-- All Districts --</option>' + districts.map(d => `<option value="${encodeURIComponent(d)}">${d}</option>`).join('');
+                districtSelect.disabled = false;
+            } catch (e) {
+                districtSelect.innerHTML = '<option value="">(Failed)</option>';
+                console.error(e);
+            }
+        }
+
+        fetchBtn.addEventListener('click', async () => {
+            const stateVal = stateSelect.value;
+            if (!stateVal) { alert('Select a state first'); return; }
+            const stateName = decodeURIComponent(stateVal);
+            const districtVal = districtSelect.value ? decodeURIComponent(districtSelect.value) : '';
+            loadingEl.style.display = 'block';
+            ensureLayerShells();
+            const tasks = [];
+            const allFeatures = [];
+            if (cbState.checked) tasks.push(loadStateBoundary(stateName).then(fc => { if (fc) allFeatures.push(...fc.features); })); else clearStateLayer();
+            if (cbDistrict.checked) tasks.push(loadDistrictBoundary(stateName, districtVal).then(fc => { if (fc) allFeatures.push(...fc.features); })); else clearDistrictLayer();
+            await Promise.all(tasks);
+            if (allFeatures.length) fitTo({ type: 'FeatureCollection', features: allFeatures });
+            loadingEl.style.display = 'none';
+        });
+
+        resetBtn.addEventListener('click', () => map.easeTo(fullView));
+        clearBtn.addEventListener('click', () => clearAll());
+
+        function ensureLayerShells() {
+            if (cbState.checked && !map.getSource('states')) {
+                map.addSource('states', { type: 'geojson', data: emptyFC() });
+                map.addLayer({ id: 'states-fill', type: 'fill', source: 'states', paint: { 'fill-color': '#FFA500', 'fill-opacity': 0.15 } });
+                map.addLayer({ id: 'states-outline', type: 'line', source: 'states', paint: { 'line-color': '#FF8C00', 'line-width': 2 } });
+            }
+            if (cbDistrict.checked && !map.getSource('districts')) {
+                map.addSource('districts', { type: 'geojson', data: emptyFC() });
+                map.addLayer({ id: 'districts-fill', type: 'fill', source: 'districts', paint: { 'fill-color': '#9C27B0', 'fill-opacity': 0.20 } });
+                map.addLayer({ id: 'districts-outline', type: 'line', source: 'districts', paint: { 'line-color': '#7B1FA2', 'line-width': 1.5 } });
+            }
+
+        }
+
+        async function loadStateBoundary(stateName) {
+            stateStatus.textContent = 'Loading...'; stateStatus.style.color = '#0070ff';
+            const key = stateName;
+            if (cache.state[key]) { map.getSource('states')?.setData(cache.state[key]); stateStatus.textContent = 'Loaded (cache)'; stateStatus.style.color = '#2f7d32'; return cache.state[key]; }
+            try {
+                // Request simplified geometry to speed up
+                const where = `State_Name='${stateName.replace(/'/g, "''")}'`;
+                const url = `${STATE_SERVICE}/query?where=${encodeURIComponent(where)}&outFields=State_Name&f=geojson&geometryPrecision=5&maxAllowableOffset=0.01`; // ~1km simplification
+                const data = await fetchJSON(url, { timeout: 15000 });
+                cache.state[key] = data; currentStateGeoJSON = data; map.getSource('states')?.setData(data);
+                stateStatus.textContent = `Loaded (${data.features?.length || 0})`; stateStatus.style.color = '#2f7d32';
+                return data;
+            } catch (e) { stateStatus.textContent = 'Error'; stateStatus.style.color = '#c62828'; console.error(e); }
+        }
+
+        async function loadDistrictBoundary(stateName, districtName) {
+            districtStatus.textContent = 'Loading...'; districtStatus.style.color = '#0070ff';
+            const key = stateName + '::' + (districtName || '*');
+            if (cache.district[key]) { map.getSource('districts')?.setData(cache.district[key]); districtStatus.textContent = 'Loaded (cache)'; districtStatus.style.color = '#2f7d32'; return cache.district[key]; }
+            try {
+                let where = `State='${stateName.replace(/'/g, "''")}'`;
+                if (districtName) where += ` AND District='${districtName.replace(/'/g, "''")}'`;
+                const url = `${DISTRICT_SERVICE}/query?where=${encodeURIComponent(where)}&outFields=State,District&f=geojson&geometryPrecision=5&maxAllowableOffset=0.01`;
+                const data = await fetchJSON(url, { timeout: 15000 });
+                cache.district[key] = data; currentDistrictGeoJSON = data; map.getSource('districts')?.setData(data);
+                districtStatus.textContent = `Loaded (${data.features?.length || 0})`; districtStatus.style.color = '#2f7d32';
+                return data;
+            } catch (e) { districtStatus.textContent = 'Error'; districtStatus.style.color = '#c62828'; console.error(e); }
+        }
+
+
+
+        function clearStateLayer() { map.getSource('states')?.setData(emptyFC()); stateStatus.textContent = 'Inactive'; stateStatus.style.color = '#666'; }
+        function clearDistrictLayer() { map.getSource('districts')?.setData(emptyFC()); districtStatus.textContent = 'Inactive'; districtStatus.style.color = '#666'; }
+        function clearAll() { clearStateLayer(); clearDistrictLayer(); }
+
+        function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
+        function fitTo(fc) { if (!fc || !fc.features || !fc.features.length) return; try { const b = turf.bbox(fc); map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 35, duration: 750 }); } catch (e) { console.warn('fit error', e); } }
+    </script>
+</body>
+
+</html>
