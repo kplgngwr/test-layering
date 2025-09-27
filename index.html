@@ -63,8 +63,7 @@
 
     button,
     select {
-      margin-top: 8px;
-      margin-bottom: 8px;
+      margin: 8px 0;
       width: 90%;
       font-size: 15px;
     }
@@ -105,7 +104,6 @@
 <body>
   <div id="map"></div>
 
-  <!-- Control panel for selection -->
   <div class="control-panel">
     <label for="state-select">State</label>
     <select id="state-select">
@@ -115,40 +113,44 @@
       <option value="Tripura">Tripura</option>
       <option value="Telangana">Telangana</option>
     </select>
+
     <label for="district-select">District</label>
     <select id="district-select">
       <option value="">-- All Districts --</option>
-      <!-- District options will be dynamically loaded -->
     </select>
+
     <label for="village-select">Village</label>
-    <select id="village-select">
+    <select id="village-select" disabled>
       <option value="">-- All Villages --</option>
-      <!-- Village options will be dynamically loaded -->
     </select>
+
     <button id="fetch-btn">Fetch Layer(s)</button>
     <button id="reset-btn">Reset View</button>
     <button id="clear-btn">Clear Layers</button>
+
     <div class="desc">
-      1. Select a State (required). 2. Optionally select a District.<br>
-      3. Tick desired layers in legend. 4. Click Fetch Layer(s). No layers shown by default.
+      1. Select a State (required). 2. Select a District to enable Villages.<br>
+      3. Tick desired layers in legend. 4. Click Fetch Layer(s).
     </div>
   </div>
 
-  <!-- Layer legend & status -->
   <div class="legend-panel">
     <b>Layers (select & then Fetch)</b><br>
     <input type="checkbox" id="state-boundary" checked>
     <span class="layer-color state"></span>
     <label for="state-boundary">State Boundary</label>
     <span id="state-status" class="layer-status cache"></span><br>
+
     <input type="checkbox" id="district-boundary" checked>
     <span class="layer-color district"></span>
     <label for="district-boundary">District Boundary</label>
     <span id="district-status" class="layer-status cache"></span><br>
+
     <input type="checkbox" id="village-boundary" checked>
     <span class="layer-color village"></span>
     <label for="village-boundary">Village Boundary</label>
     <span id="village-status" class="layer-status cache"></span><br>
+
     <input type="checkbox" id="water-bodies" checked>
     <span class="layer-color water"></span>
     <label for="water-bodies">Surface Water Bodies</label>
@@ -165,124 +167,205 @@
       zoom: 5.2
     });
 
-    // Layer API endpoints
+    // === ArcGIS endpoints ===
     const STATE_SERVICE = 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/state_boundary/FeatureServer/0';
     const DISTRICT_SERVICE = 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/district_boundary/FeatureServer/0';
     const VILLAGE_SERVICE = 'https://livingatlas.esri.in/server/rest/services/IAB2024/IAB_Village_2024/MapServer/0';
-    // Water bodies per state
+
     const WATER_LAYER_BY_STATE = {
       'Madhya Pradesh': 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/Madhya_pradesh_water_bodies/FeatureServer/0',
       'Tripura': 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/Tripura_water_bodies/FeatureServer/0',
       'Telangana': 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/Telangana_Water__Bodies/FeatureServer/0',
       'Odisha': 'https://services5.arcgis.com/73n8CSGpSSyHr1T9/arcgis/rest/services/Odisha_water_bodies/FeatureServer/0'
     };
-    // Selected value from dropdown is a human name ("Tripura")
+
+    // State name <-> code (your mixed data model)
     const STATE_CODE = { 'Odisha': 'OD', 'Madhya Pradesh': 'MP', 'Tripura': 'TR', 'Telangana': 'TS' };
-    const STATE_NAME_BY_CODE = { OD: 'Odisha', MP: 'Madhya Pradesh', TR: 'Tripura', TS: 'Telangana' };
 
-    function esc(s) { return String(s).replace(/'/g, "''"); } // SQL-escape single quotes
+    // UI elements
+    const stateSelect = document.getElementById('state-select');
+    const districtSelect = document.getElementById('district-select');
+    const villageSelect = document.getElementById('village-select');
 
-    // Helper for map source/layer management
-    function removeLayerAndSource(id) {
-      if (map.getLayer(id)) map.removeLayer(id);
-      if (map.getSource(id)) map.removeSource(id);
-    }
-
-    // Layer status UI helpers
+    // Utils
+    function esc(s) { return String(s).replace(/'/g, "''"); }
     function setStatus(id, msg, isCache = false) {
       const el = document.getElementById(id);
       el.textContent = msg;
       el.className = 'layer-status' + (isCache ? ' cache' : '');
     }
-
-    // Fetch districts for selected state via district service layer
-    document.getElementById('state-select').addEventListener('change', function () {
-      const state = this.value;
-      setStatus('district-status', '', true);
-      const distSelect = document.getElementById('district-select');
-      // Reset and disable while loading
-      distSelect.innerHTML = `<option value="">-- All Districts --</option>`;
-      distSelect.disabled = true;
-      if (!state) return;
-      // Query distinct districts for selected state (service uses lowercase field names)
-      const stateCode = STATE_CODE[state];
-      const where = `state='${stateCode}'`;
-      const url = `${DISTRICT_SERVICE}/query?where=${encodeURIComponent(where)}&outFields=district&returnDistinctValues=true&returnGeometry=false&f=json`;
-      fetch(url)
-        .then(res => res.json())
-        .then(json => {
-          const districts = (json.features || [])
-            .map(f => (f.attributes && (f.attributes.district || f.attributes.District)))
-            .filter(Boolean)
-            .sort((a, b) => a.localeCompare(b));
-          for (const dist of districts) {
-            const opt = document.createElement('option');
-            opt.value = dist;
-            opt.textContent = dist;
-            distSelect.appendChild(opt);
-          }
-        })
-        .catch(err => {
-          console.warn('Failed to load districts', err);
-        })
-        .finally(() => {
-          distSelect.disabled = false;
-        });
-    });
-
-    // Fetch villages for selected state & district via village service layer
-    document.getElementById('district-select').addEventListener('change', function () {
-      const district = this.value;
-      setStatus('village-status', '', true);
-      const villageSelect = document.getElementById('village-select');
-      // Reset and disable while loading
+    function removeLayerAndSource(id) {
+      if (map.getLayer(id)) map.removeLayer(id);
+      if (map.getSource(id)) map.removeSource(id);
+    }
+    function addOrUpdateGeoJSONSource(sourceId, data) {
+      if (map.getSource(sourceId)) map.getSource(sourceId).setData(data);
+      else map.addSource(sourceId, { type: 'geojson', data });
+    }
+    function resetVillageSelect() {
       villageSelect.innerHTML = `<option value="">-- All Villages --</option>`;
       villageSelect.disabled = true;
-      if (!district) return;
-      // Query distinct villages for selected state & district (service uses lowercase field names)
-      const where = `state='${state}' AND district='${escapeSql(district)}'`;
-      const url = `${VILLAGE_SERVICE}/query?where=${encodeURIComponent(where)}&outFields=${VILLAGE_FIELD}&returnDistinctValues=true&returnGeometry=false&f=json`;
-      fetch(url)
-        .then(res => res.json())
-        .then(json => {
-          const villages = (json.features || [])
-            .map(f => (f.attributes && (f.attributes[VILLAGE_FIELD] || f.attributes[VILLAGE_FIELD.toLowerCase()])))
-            .filter(Boolean)
-            .sort((a, b) => a.localeCompare(b));
-          for (const village of villages) {
-            const opt = document.createElement('option');
-            opt.value = village;
-            opt.textContent = village;
-            villageSelect.appendChild(opt);
-          }
-        })
-        .catch(err => {
-          console.warn('Failed to load villages', err);
-        })
-        .finally(() => {
-          villageSelect.disabled = false;
+      setStatus('village-status', 'Select a district', true);
+    }
+
+    // Abort controllers to avoid stale overwrites
+    let abortDistricts = null;
+    let abortVillages = null;
+
+    // === Data loaders ===
+    async function loadDistrictsForState(stateName) {
+      const code = STATE_CODE[stateName];
+      if (!code) return [];
+
+      if (abortDistricts) abortDistricts.abort();
+      abortDistricts = new AbortController();
+
+      const params = new URLSearchParams({
+        where: `State='${esc(code)}'`,   // district_boundary: State (code)
+        outFields: 'District',           // exact case
+        returnDistinctValues: 'true',
+        orderByFields: 'District',
+        returnGeometry: 'false',
+        f: 'json'
+      });
+
+      const res = await fetch(`${DISTRICT_SERVICE}/query?${params.toString()}`, { signal: abortDistricts.signal });
+      const json = await res.json();
+
+      return (json.features || [])
+        .map(f => f?.attributes?.District)
+        .filter(Boolean)
+        .map(s => s.trim())
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .sort((a, b) => a.localeCompare(b));
+    }
+
+    async function loadVillagesForStateDistrict(stateName, districtName) {
+      if (!stateName || !districtName) return [];
+
+      // Abort previous
+      if (abortVillages) abortVillages.abort();
+      abortVillages = new AbortController();
+
+      // Case-insensitive WHERE (prevents subtle mismatches)
+      const where = [
+        `UPPER(State)=UPPER('${esc(stateName)}')`,
+        `UPPER(District)=UPPER('${esc(districtName)}')`
+      ].join(' AND ');
+
+      // Use statistics + groupBy for true distincts, and paginate with resultOffset
+      const stats = JSON.stringify([
+        { statisticType: 'count', onStatisticField: 'Name', outStatisticFieldName: 'cnt' }
+      ]);
+
+      const pageSize = 2000;     // safe high page size
+      let resultOffset = 0;
+      let villages = new Set();
+
+      while (true) {
+        const params = new URLSearchParams({
+          where,
+          outFields: 'Name',
+          groupByFieldsForStatistics: 'Name',
+          outStatistics: stats,
+          orderByFields: 'Name',
+          returnGeometry: 'false',
+          f: 'json',
+          resultOffset: String(resultOffset),
+          resultRecordCount: String(pageSize)
         });
+
+        const url = `${VILLAGE_SERVICE}/query?${params.toString()}`;
+        const res = await fetch(url, { signal: abortVillages.signal });
+        const json = await res.json();
+
+        if (json.error) throw new Error(`ArcGIS error: ${JSON.stringify(json.error)}`);
+
+        const feats = json.features || [];
+        for (const f of feats) {
+          const n = (f?.attributes?.Name ?? f?.attributes?.name ?? '').trim();
+          if (n) villages.add(n);
+        }
+
+        // If server signals more data, continue paging
+        if (json.exceededTransferLimit && feats.length > 0) {
+          resultOffset += feats.length;
+        } else {
+          break;
+        }
+      }
+
+      return [...villages].sort((a, b) => a.localeCompare(b));
+    }
+
+
+    // === Event wiring ===
+    stateSelect.addEventListener('change', async function () {
+      const stateName = this.value;
+
+      // reset dependents
+      districtSelect.innerHTML = `<option value="">-- All Districts --</option>`;
+      districtSelect.disabled = true;
+      resetVillageSelect();
+
+      if (!stateName) return;
+
+      try {
+        const districts = await loadDistrictsForState(stateName);
+        for (const d of districts) {
+          const opt = document.createElement('option');
+          opt.value = d;
+          opt.textContent = d;
+          districtSelect.appendChild(opt);
+        }
+      } catch (e) {
+        console.warn('Failed to load districts', e);
+      } finally {
+        districtSelect.disabled = false;
+      }
     });
 
+    districtSelect.addEventListener('change', async function () {
+      const stateName = stateSelect.value;
+      const districtName = this.value;
 
-    // Fetch & display layers on button click
+      resetVillageSelect();
+      if (!districtName) return;
+
+      try {
+        setStatus('village-status', 'Loading...', false);
+        const villages = await loadVillagesForStateDistrict(stateName, districtName);
+        for (const v of villages) {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          villageSelect.appendChild(opt);
+        }
+        villageSelect.disabled = false;
+        setStatus('village-status', `Loaded (${villages.length})`, false);
+      } catch (e) {
+        setStatus('village-status', 'Error', false);
+        console.warn('Failed to load villages', e);
+      }
+    });
+
+    // === Buttons ===
     document.getElementById('fetch-btn').onclick = () => {
-      const state = document.getElementById('state-select').value;
-      const district = document.getElementById('district-select').value;
-      const village = document.getElementById('village-select').value;
+      const state = stateSelect.value;
+      const district = districtSelect.value;
+      const village = villageSelect.value;
+
       if (!state) {
         alert('Please select a state.');
         return;
       }
-      // Clear previous layers
+
       clearAllLayers();
-      // Status update
       setStatus('state-status', 'Loading...', false);
       setStatus('district-status', 'Loading...', false);
       setStatus('village-status', 'Loading...', false);
       setStatus('water-status', 'Loading...', false);
 
-      // Fetch & show layers as per checkbox
       if (document.getElementById('state-boundary').checked) {
         showStateBoundary(state);
       } else setStatus('state-status', 'Not loaded', true);
@@ -292,7 +375,11 @@
       } else setStatus('district-status', 'Not loaded', true);
 
       if (document.getElementById('village-boundary').checked) {
-        showVillageBoundary(state, district, village);
+        if (!district) {
+          setStatus('village-status', 'Select a district to load villages', false);
+        } else {
+          showVillageBoundary(state, district, village);
+        }
       } else setStatus('village-status', 'Not loaded', true);
 
       if (document.getElementById('water-bodies').checked) {
@@ -316,28 +403,28 @@
       setStatus('water-status', '', true);
     }
 
-    // Display State Boundary
+    // === Renderers ===
     async function showStateBoundary(stateName) {
       const code = STATE_CODE[stateName];
       const candidates = [
-        `State_Name='${esc(code)}'`,      // by code (TR)
-        `State_FSI='${esc(stateName)}'`   // by name (Tripura)
+        `State_Name='${esc(code)}'`,    // code e.g., TR
+        `State_FSI='${esc(stateName)}'` // name e.g., Tripura
       ];
 
       let data = null;
       for (const where of candidates) {
         const qs = new URLSearchParams({ where, outFields: '*', f: 'geojson' });
-        const res = await fetch(`${STATE_SERVICE}/query?${qs.toString()}`);
-        const j = await res.json();
-        if (j?.features?.length) { data = j; break; }
+        try {
+          const res = await fetch(`${STATE_SERVICE}/query?${qs.toString()}`);
+          const j = await res.json();
+          if (j?.features?.length) { data = j; break; }
+        } catch (_) { }
       }
 
       if (!data) { setStatus('state-status', 'Error', false); return; }
 
-      if (map.getSource('state-boundary-layer')) {
-        map.getSource('state-boundary-layer').setData(data);
-      } else {
-        map.addSource('state-boundary-layer', { type: 'geojson', data });
+      addOrUpdateGeoJSONSource('state-boundary-layer', data);
+      if (!map.getLayer('state-boundary-layer')) {
         map.addLayer({
           id: 'state-boundary-layer',
           type: 'line',
@@ -351,100 +438,95 @@
       map.fitBounds(bbox, { padding: 40, duration: 1000 });
     }
 
-
-
-
-    // Display District Boundary
     async function showDistrictBoundary(stateName, districtName) {
       const code = STATE_CODE[stateName];
-      const parts = [`State='${esc(code)}'`];           // code e.g., TR
-      if (districtName) parts.push(`District='${esc(districtName)}'`); // name e.g., Sepahijala
+      const parts = [`State='${esc(code)}'`];
+      if (districtName) parts.push(`District='${esc(districtName)}'`);
       const where = parts.join(' AND ');
 
       const qs = new URLSearchParams({ where, outFields: '*', f: 'geojson' });
-      const res = await fetch(`${DISTRICT_SERVICE}/query?${qs.toString()}`);
-      const data = await res.json();
+      try {
+        const res = await fetch(`${DISTRICT_SERVICE}/query?${qs.toString()}`);
+        const data = await res.json();
 
-      if (map.getSource('district-boundary-layer')) {
-        map.getSource('district-boundary-layer').setData(data);
-      } else {
-        map.addSource('district-boundary-layer', { type: 'geojson', data });
-        map.addLayer({
-          id: 'district-boundary-layer',
-          type: 'line',
-          source: 'district-boundary-layer',
-          paint: { 'line-color': '#e53935', 'line-width': 2 }
-        });
+        addOrUpdateGeoJSONSource('district-boundary-layer', data);
+        if (!map.getLayer('district-boundary-layer')) {
+          map.addLayer({
+            id: 'district-boundary-layer',
+            type: 'line',
+            source: 'district-boundary-layer',
+            paint: { 'line-color': '#e53935', 'line-width': 2 }
+          });
+        }
+        setStatus('district-status', `Loaded${data.features?.length ? ` (${data.features.length})` : ''}`, true);
+      } catch {
+        setStatus('district-status', 'Error', false);
       }
-      setStatus('district-status', `Loaded${data.features?.length ? ` (${data.features.length})` : ''}`, true);
     }
 
-
-
-    // Display Village Boundary (State -> optional District -> optional Village)
     async function showVillageBoundary(stateName, districtName, villageName) {
-      const parts = [`State='${esc(stateName)}'`];          // e.g., Tripura
-      if (districtName) parts.push(`District='${esc(districtName)}'`); // e.g., Gomati
-      if (villageName) parts.push(`Name='${esc(villageName)}'`);      // e.g., Khupilong Part
+      if (!districtName) { setStatus('village-status', 'Select a district', false); return; }
+
+      const parts = [`State='${esc(stateName)}'`, `District='${esc(districtName)}'`];
+      if (villageName) parts.push(`Name='${esc(villageName)}'`);
       const where = parts.join(' AND ');
 
-      const qs = new URLSearchParams({
-        where, outFields: 'State,District,Name', f: 'geojson'
-      });
+      const qs = new URLSearchParams({ where, outFields: 'State,District,Name', f: 'geojson' });
+      try {
+        const res = await fetch(`${VILLAGE_SERVICE}/query?${qs.toString()}`);
+        const data = await res.json();
+        if (!data?.features) { setStatus('village-status', 'Error', false); return; }
 
-      const res = await fetch(`${VILLAGE_SERVICE}/query?${qs.toString()}`);
-      const data = await res.json();
-      if (!data?.features) { setStatus('village-status', 'Error', false); return; }
+        addOrUpdateGeoJSONSource('village-boundary-layer', data);
+        if (!map.getLayer('village-boundary-layer')) {
+          map.addLayer({
+            id: 'village-boundary-layer',
+            type: 'line',
+            source: 'village-boundary-layer',
+            paint: { 'line-color': '#43a047', 'line-width': 1.5 }
+          });
+        }
+        setStatus('village-status', `Loaded (${data.features.length})`, false);
 
-      if (map.getSource('village-boundary-layer')) {
-        map.getSource('village-boundary-layer').setData(data);
-      } else {
-        map.addSource('village-boundary-layer', { type: 'geojson', data });
-        map.addLayer({
-          id: 'village-boundary-layer',
-          type: 'line',
-          source: 'village-boundary-layer',
-          paint: { 'line-color': '#43a047', 'line-width': 1.5 }
-        });
+        if (!map.getSource('state-boundary-layer') && data.features.length) {
+          const bbox = turf.bbox(data);
+          map.fitBounds(bbox, { padding: 40, duration: 1000 });
+        }
+      } catch {
+        setStatus('village-status', 'Error', false);
       }
-      setStatus('village-status', `Loaded (${data.features.length})`, false);
     }
 
-
-
-    // Display Water Bodies
     async function showWaterBodies(stateName, districtName) {
       const layerUrl = WATER_LAYER_BY_STATE[stateName];
       if (!layerUrl) { setStatus('water-status', 'Not available', false); return; }
 
-      const code = STATE_CODE[stateName]; // TR
-      const parts = [`state='${esc(code)}'`];                   // lowercase field
-      if (districtName) parts.push(`district='${esc(districtName)}'`); // name (e.g., Sepahijala)
-      // Optionally you can also filter village if you expose it in UI:
-      // if (villageName) parts.push(`village='${esc(villageName)}'`);
-
+      const code = STATE_CODE[stateName]; // lowercase fields in these services
+      const parts = [`state='${esc(code)}'`];
+      if (districtName) parts.push(`district='${esc(districtName)}'`);
       const where = parts.join(' AND ');
+
       const qs = new URLSearchParams({ where, outFields: '*', f: 'geojson' });
+      try {
+        const res = await fetch(`${layerUrl}/query?${qs.toString()}`);
+        const data = await res.json();
 
-      const res = await fetch(`${layerUrl}/query?${qs.toString()}`);
-      const data = await res.json();
-
-      if (map.getSource('water-bodies-layer')) {
-        map.getSource('water-bodies-layer').setData(data);
-      } else {
-        map.addSource('water-bodies-layer', { type: 'geojson', data });
-        map.addLayer({
-          id: 'water-bodies-layer',
-          type: 'fill',
-          source: 'water-bodies-layer',
-          paint: { 'fill-color': '#1976d2', 'fill-opacity': 0.55 }
-        });
+        addOrUpdateGeoJSONSource('water-bodies-layer', data);
+        if (!map.getLayer('water-bodies-layer')) {
+          map.addLayer({
+            id: 'water-bodies-layer',
+            type: 'fill',
+            source: 'water-bodies-layer',
+            paint: { 'fill-color': '#1976d2', 'fill-opacity': 0.55 }
+          });
+        }
+        setStatus('water-status', `Loaded (${data.features?.length || 0})`, false);
+      } catch {
+        setStatus('water-status', 'Error', false);
       }
-      setStatus('water-status', `Loaded (${data.features?.length || 0})`, false);
     }
 
-
-    // Turf.js for bbox calculation (add from CDN)
+    // Turf for bbox
     const turfScript = document.createElement('script');
     turfScript.src = 'https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js';
     document.head.appendChild(turfScript);
