@@ -383,7 +383,7 @@
       } else setStatus('village-status', 'Not loaded', true);
 
       if (document.getElementById('water-bodies').checked) {
-        showWaterBodies(state, district);
+        showWaterBodies(state, district, village);
       } else setStatus('water-status', 'Not loaded', true);
     };
 
@@ -497,16 +497,18 @@
       }
     }
 
-    async function showWaterBodies(stateName, districtName) {
+    async function showWaterBodies(stateName, districtName, villageName) {
       const layerUrl = WATER_LAYER_BY_STATE[stateName];
       if (!layerUrl) { setStatus('water-status', 'Not available', false); return; }
 
-      const code = STATE_CODE[stateName]; // lowercase fields in these services
-      const parts = [`state='${esc(code)}'`];
-      if (districtName) parts.push(`district='${esc(districtName)}'`);
-      const where = parts.join(' AND ');
+      const code = STATE_CODE[stateName]; // services use lowercase fields
+      const parts = [`state='${esc(code)}'`];           // state code (e.g., TR)
+      if (districtName) parts.push(`district='${esc(districtName)}'`); // district name
+      if (villageName) parts.push(`village='${esc(villageName)}'`);   // village name
 
+      const where = parts.join(' AND ');
       const qs = new URLSearchParams({ where, outFields: '*', f: 'geojson' });
+
       try {
         const res = await fetch(`${layerUrl}/query?${qs.toString()}`);
         const data = await res.json();
@@ -525,6 +527,7 @@
         setStatus('water-status', 'Error', false);
       }
     }
+
 
     // Turf for bbox
     const turfScript = document.createElement('script');
